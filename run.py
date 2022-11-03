@@ -235,6 +235,7 @@ if __name__ == "__main__":
                         help="Export all GPU FP32 unit active ratio records to a csv file. The default csv file name is [model_name]_all_metrics.csv.")
     parser.add_argument("--stress", type=float, default=0, help="Specify execution time (seconds) to stress devices.")
     parser.add_argument("--num-iter", type=int, default=100, help="The number of interation for testing")
+    parser.add_argument("--ipex", action='store_true', help="enable ipex optimization")
     args, extra_args = parser.parse_known_args()
 
     if args.cudastreams and not args.device == "cuda":
@@ -276,6 +277,8 @@ if __name__ == "__main__":
     elif args.cudastreams:
         run_one_step_with_cudastreams(test, 10)
     else:
+        if args.ipex:
+            m.enable_ipex_optimize()
         run_one_step(test, num_iter=args.num_iter, model_flops=model_flops, model=m, export_dcgm_metrics_file=export_dcgm_metrics_file, stress=args.stress)
     if hasattr(m, 'correctness'):
         print('{:<20} {:>20}'.format("Correctness: ", str(m.correctness)), sep='')
