@@ -1,3 +1,4 @@
+import copy
 import os
 import torch
 from contextlib import contextmanager, ExitStack
@@ -8,7 +9,8 @@ from pathlib import Path
 from typing import ContextManager, Optional, List, Tuple, Generator
 from torchbenchmark import REPO_PATH
 from torchbenchmark.util.extra_args import check_correctness_p, is_hf_model, parse_opt_args, apply_opt_args, \
-                                           parse_decoration_args, apply_decoration_args
+                                           parse_decoration_args, apply_decoration_args, is_staged_train_test, \
+                                           TEST_STAGE
 from torchbenchmark.util.env_check import set_random_seed, correctness_check, stableness_check
 
 class PostInitProcessor(type):
@@ -80,9 +82,29 @@ class BenchmarkModel(metaclass=PostInitProcessor):
         self.determine_batch_size(batch_size)
         self.extra_args = extra_args
         # contexts to run in the test function
+        if self.test == "train":
+            # In train test, there are run contexts that should only be applied for forward/backward/optimizer stage
+            # For example, amp only applies for the forward stage
+            self.forward_contexts = []
+            self.backward_contexts = []
+            self.optimizer_contexts = []
         self.run_contexts = [
             enable_profiling_executor  # force JIT profiling executor to be enabled by default
         ]
+
+        # taken from torchdynamo benchmarks, this further controls randomness settings
+        def deterministic_torch_manual_seed(*args, **kwargs):
+            from torch._C import default_generator
+
+            seed = 1337
+            import torch.cuda
+
+            if not torch.cuda._is_in_bad_fork():
+                torch.cuda.manual_seed_all(seed)
+
+            return default_generator.manual_seed(seed)
+
+        torch.manual_seed = deterministic_torch_manual_seed
         set_random_seed()
         # sanity checks of the options
         assert self.test == "train" or self.test == "eval", f"Test must be 'train' or 'eval', but provided {self.test}."
@@ -99,9 +121,29 @@ class BenchmarkModel(metaclass=PostInitProcessor):
 
     # Run the post processing for model acceleration
     def __post__init__(self):
-        should_check_correctness = check_correctness_p(self, self.opt_args)
+        should_check_correctness = check_correctness_p(self, self.opt_args, self.dargs)
         if should_check_correctness:
             self.eager_output = stableness_check(self, cos_sim=False, deepcopy=self.DEEPCOPY, rounds=1)
+            if isinstance(self.eager_output, Tuple):
+                self.eager_output = tuple((t.detach() if isinstance(t, torch.Tensor) else t) for t in self.eager_output)
+            elif isinstance(self.eager_output, torch.Tensor):
+                self.eager_output = self.eager_output.detach()
+            if self.test == "train":
+                opt_saved = None
+                if hasattr(self, "opt"):
+                    opt_saved = self.opt
+                    self.opt = None
+                try:
+                    if self.DEEPCOPY:
+                        copy_model = copy.deepcopy(self)
+                    else:
+                        copy_model = self
+                    copy_model.invoke()
+                    self.eager_model_after_one_train_iteration = copy_model.model
+                except RuntimeError:
+                    warnings.warn(UserWarning("Can't copy the model. Skipping train correctness check."))
+                if opt_saved:
+                    self.opt = opt_saved
         # apply decoration args
         apply_decoration_args(self, self.dargs)
         # apply optimization args
@@ -141,9 +183,12 @@ class BenchmarkModel(metaclass=PostInitProcessor):
         if not batch_size:
             self.batch_size = self.DEFAULT_TRAIN_BSIZE if self.test == "train" else self.DEFAULT_EVAL_BSIZE
             # use the device suggestion on CUDA inference tests
-            if self.test == "eval" and self.device == "cuda":
-                current_device_name = torch.cuda.get_device_name()
-                assert current_device_name, f"torch.cuda.get_device_name() returns None when device is set to cuda, please double check."
+            if self.test == "eval":
+                if self.device == "cuda":
+                    current_device_name = torch.cuda.get_device_name()
+                    assert current_device_name, f"torch.cuda.get_device_name() returns None when device is set to cuda, please double check."
+                elif self.device == "cpu":
+                    current_device_name = "cpu"
                 if self.metadata and "devices" in self.metadata and current_device_name in self.metadata["devices"]:
                     self.batch_size = self.metadata["devices"][current_device_name]["eval_batch_size"]
             # If the model doesn't implement test or eval test
@@ -168,10 +213,17 @@ class BenchmarkModel(metaclass=PostInitProcessor):
             metadata = yaml.safe_load(mf)
         return metadata
 
-    def add_context(self, context_fn):
+    def add_context(self, context_fn, stage=TEST_STAGE.ALL):
         ctx = context_fn()
         assert isinstance(ctx, ContextManager), f"Expected adding a ContextManager, get {type(ctx)}. Please report a bug."
-        self.run_contexts.append(context_fn)
+        if stage == TEST_STAGE.ALL:
+            self.run_contexts.append(context_fn)
+        elif stage == TEST_STAGE.FORWARD:
+            self.forward_contexts.append(context_fn)
+        elif stage == TEST_STAGE.BACKWARD:
+            self.backward_contexts.append(context_fn)
+        elif stage == TEST_STAGE.OPTIMIZER:
+            self.optimizer_contexts.append(context_fn)
 
     # Default implementation for replacing the model
     def set_module(self, new_model):
@@ -186,8 +238,27 @@ class BenchmarkModel(metaclass=PostInitProcessor):
         raise NotImplementedError("Default input generation function is not implemented. "
                                   "Please submit an issue if you need input iterator implementation for the model.")
 
+    def invoke_staged_train_test(self) -> None:
+        if hasattr(self, "opt") and self.opt:
+            self.opt.zero_grad()
+
+        with nested(*self.forward_contexts):
+            losses = self.forward()
+
+        with nested(*self.backward_contexts):
+            self.backward(losses)
+
+        if hasattr(self, "opt") and self.opt:
+            with nested(*self.optimizer_contexts):
+                self.optimizer()
+
+        return None
+
     def invoke(self) -> Optional[Tuple[torch.Tensor]]:
         out = None
+        if self.test == "train" and is_staged_train_test(self):
+            self.invoke_staged_train_test()
+            return out
         with nested(*self.run_contexts):
             if self.test == "train":
                 self.train()

@@ -8,7 +8,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader
 from torchbenchmark.util.e2emodel import E2EBenchmarkModel
 from torchbenchmark.tasks import NLP
-from datasets import load_metric
+import evaluate
 from accelerate import Accelerator
 from transformers import (
     AdamW,
@@ -22,6 +22,11 @@ from transformers import (
 from typing import Optional
 from torchbenchmark.util.framework.transformers.text_classification.dataset import prep_dataset, preprocess_dataset, prep_labels
 from torchbenchmark.util.framework.transformers.text_classification.args import parse_args, parse_torchbench_args
+
+try:
+    import torch._dynamo
+except ImportError:
+    pass
 
 # setup environment variable
 CURRENT_DIR = Path(os.path.dirname(os.path.realpath(__file__)))
@@ -165,8 +170,8 @@ class Model(E2EBenchmarkModel):
         ]
         optimizer = AdamW(optimizer_grouped_parameters, lr=hf_args.learning_rate)
 
-        # Prepare everything with our `accelerator`.
-        if hf_args.distributed == "deepspeed":
+        # Prepare everything with our `accelerator` with deepspeed or non-distributed environment.
+        if hf_args.distributed == "deepspeed" or hf_args.distributed == "none":
             # deepspeed will error unless all components prepared at the same time
             model, train_dataloader, eval_dataloader, optimizer = accelerator.prepare(model, train_dataloader, eval_dataloader, optimizer)
         else:
@@ -193,9 +198,9 @@ class Model(E2EBenchmarkModel):
         # Steup metrics
         # Get the metric function
         if hf_args.task_name is not None:
-            self.metric = load_metric("glue", hf_args.task_name)
+            self.metric = evaluate.load("glue", hf_args.task_name)
         else:
-            self.metric = load_metric("accuracy")
+            self.metric = evaluate.load("accuracy")
         # Setup class members
         self.hf_args = hf_args
         self.is_regression = is_regression
@@ -212,14 +217,11 @@ class Model(E2EBenchmarkModel):
         for _epoch in range(self.hf_args.num_train_epochs):
             self.model.train()
             for step, batch in enumerate(self.train_dataloader):
-                outputs = self.model(**batch)
-                loss = outputs.loss
+                loss = self.run_forward(batch)
                 loss = loss / self.hf_args.gradient_accumulation_steps
-                self.accelerator.backward(loss)
+                self.run_backward(loss)
                 if step % self.hf_args.gradient_accumulation_steps == 0 or step == len(self.train_dataloader) - 1:
-                    self.optimizer.step()
-                    self.lr_scheduler.step()
-                    self.optimizer.zero_grad()
+                    self.run_optimizer_step()
                     completed_steps += 1
 
                 if completed_steps >= self.hf_args.max_train_steps:
@@ -227,7 +229,7 @@ class Model(E2EBenchmarkModel):
             if self.tb_args.validate_in_train:
                 self.model.eval()
                 for step, batch in enumerate(self.eval_dataloader):
-                    outputs = self.model(**batch)
+                    outputs = self.run_eval(batch)
                     predictions = outputs.logits.argmax(dim=-1) if not self.is_regression else outputs.logits.squeeze()
                     self.metric.add_batch(
                         predictions=self.accelerator.gather(predictions),
@@ -245,7 +247,7 @@ class Model(E2EBenchmarkModel):
 
                 self.model.eval()
                 for step, batch in enumerate(eval_dataloader):
-                    outputs = self.model(**batch)
+                    outputs = self.run_eval(batch)
                     predictions = outputs.logits.argmax(dim=-1)
                     self.metric.add_batch(
                         predictions=self.accelerator.gather(predictions),
@@ -258,7 +260,8 @@ class Model(E2EBenchmarkModel):
     def eval(self) -> Optional[dict]:
         self.model.eval()
         for _step, batch in enumerate(self.eval_dataloader):
-            outputs = self.model(**batch)
+            with torch.no_grad():
+                outputs = self.run_eval(batch)
             predictions = outputs.logits.argmax(dim=-1) if not self.is_regression else outputs.logits.squeeze()
             self.metric.add_batch(
                     predictions=self.accelerator.gather(predictions),
@@ -274,11 +277,43 @@ class Model(E2EBenchmarkModel):
         """
         compute model forward and return loss
         """
+        if self.dynamo:
+            backend = self.opt_args.torchdynamo
+            return torch._dynamo.optimize(backend)(self._run_forward)(input)
+        else:
+            return self._run_forward(input)
+
+    def _run_forward(self, input):
         return self.model(**input).loss
 
     def run_backward(self, loss):
+        if self.dynamo:
+            backend = self.opt_args.torchdynamo
+            return torch._dynamo.optimize(backend)(self._run_backward)(loss)
+        else:
+            return self._run_backward(loss)
+
+    def _run_backward(self, loss):
         self.accelerator.backward(loss)
 
     def run_optimizer_step(self):
-        self.optimizer.step()
+        if self.dynamo:
+            backend = self.opt_args.torchdynamo
+            return torch._dynamo.optimize(backend)(self._run_optimizer_step)()
+        else:
+            return self._run_optimizer_step()
 
+    def _run_optimizer_step(self):
+        self.optimizer.step()
+        self.lr_scheduler.step()
+        self.optimizer.zero_grad()
+
+    def run_eval(self, input):
+        if self.dynamo:
+            backend = self.opt_args.torchdynamo
+            return torch._dynamo.optimize(backend)(self._run_eval)(input)
+        else:
+            return self._run_eval(input)
+
+    def _run_eval(self, input):
+        return self.model(**input)
