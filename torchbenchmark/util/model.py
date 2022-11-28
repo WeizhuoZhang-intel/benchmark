@@ -327,3 +327,22 @@ class BenchmarkModel(metaclass=PostInitProcessor):
         torch._C._set_graph_executor_optimize(True)
 
         bench_allclose(base, opt)
+    
+    def enable_ipex_optimize(self):
+        import intel_extension_for_pytorch as ipex
+        if self.test == "eval":
+            self.model.eval()
+            if self.dargs.precision == "bf16":
+                self.model=ipex.optimize(self.model,dtype=torch.bfloat16,inplace=True)
+            if self.dargs.precision == "fp32":
+                self.model = ipex.optimize(self.model, dtype=torch.float32, inplace=False)
+            print("Running Eval with IPEX {}...".format(self.dargs.precision))
+        else:
+            self.model.train()
+            self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.1, momentum=0.9) ##
+            if self.dargs.precision == "bf16":
+                self.model, self.optimizer = ipex.optimize(self.model, optimizer=self.optimizer,dtype=torch.bfloat16)
+            if self.dargs.precision == "fp32":
+                self.model, self.optimizer = ipex.optimize(self.model, optimizer=self.optimizer,dtype=torch.float32)       
+            print("Running Train with IPEX {}...".format(self.dargs.precision))
+        return self.model

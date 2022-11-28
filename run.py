@@ -16,7 +16,7 @@ import torch.profiler as profiler
 from torchbenchmark import load_model_by_name
 import torch
 
-WARMUP_ROUNDS = 3
+WARMUP_ROUNDS = 10
 SUPPORT_DEVICE_LIST = ["cpu", "cuda"]
 if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
     SUPPORT_DEVICE_LIST.append("mps")
@@ -71,7 +71,11 @@ def printResultSummaryTime(result_summary, metrics_needed=[], metrics_backend_ma
             print('{:<20} {:>20}'.format("CPU Total Wall Time:", "%.3f milliseconds" % cpu_walltime, sep=''))
     else:
         cpu_walltime = np.median(list(map(lambda x: x[0], result_summary)))
+        total_sample = model.batch_size * len(result_summary)
+        total_time = sum(map(lambda x: x[0], result_summary))
+        throughput = total_sample / total_time * 1000
         print('{:<20} {:>20}'.format("CPU Total Wall Time:", "%.3f milliseconds" % cpu_walltime, sep=''))
+        print("Throughput: {:.2f} images/s".format(throughput))				
 
     # if model_flops is not None, output the TFLOPs per sec
     if 'flops' in metrics_needed:
@@ -157,7 +161,10 @@ def run_one_step(func, nwarmup=WARMUP_ROUNDS, num_iter=10, model=None, export_me
             t0 = time.time_ns()
             func()
             t1 = time.time_ns()
-            result_summary.append([(t1 - t0) / 1_000_000])
+            time_spend = (t1 - t0) / 1_000_000
+            if _i % 10 == 0:
+                print("Iterations: {} Time/Iteration(ms): {}".format(_i, time_spend))
+            result_summary.append([time_spend])
         if stress:
             cur_time = time.time_ns()
             # print out the status every 10s.
@@ -171,6 +178,7 @@ def run_one_step(func, nwarmup=WARMUP_ROUNDS, num_iter=10, model=None, export_me
                 last_time = cur_time
                 last_it = _i
         _i += 1
+
 
     if model_analyzer is not None:
         model_analyzer.stop_monitor()
@@ -288,6 +296,8 @@ if __name__ == "__main__":
     parser.add_argument("--export-metrics", action="store_true",
                         help="Export all specified metrics records to a csv file. The default csv file name is [model_name]_all_metrics.csv.")
     parser.add_argument("--stress", type=float, default=0, help="Specify execution time (seconds) to stress devices.")
+    parser.add_argument("--num-iter", type=int, default=100, help="The number of interation for testing")
+    parser.add_argument("--ipex", action='store_true', help="enable ipex optimization")
     parser.add_argument("--metrics", type=str,
                         help="Specify metrics [cpu_peak_mem,gpu_peak_mem,flops]to be collected. The metrics are separated by comma such as cpu_peak_mem,gpu_peak_mem.")
     parser.add_argument("--metrics-gpu-backend", choices=["dcgm", "default"], default="default", help="""Specify the backend [dcgm, default] to collect metrics. \nIn default mode, the latency(execution time) is collected by time.time_ns() and it is always enabled. Optionally,
@@ -335,7 +345,9 @@ if __name__ == "__main__":
     elif args.cudastreams:
         run_one_step_with_cudastreams(test, 10)
     else:
-        run_one_step(test, model=m, export_metrics_file=export_metrics_file,
+        if args.ipex:
+            m.enable_ipex_optimize()
+        run_one_step(test, num_iter=args.num_iter,model=m, export_metrics_file=export_metrics_file,
                      stress=args.stress, metrics_needed=metrics_needed, metrics_gpu_backend=args.metrics_gpu_backend)
     if hasattr(m, 'correctness'):
         print('{:<20} {:>20}'.format("Correctness: ", str(m.correctness)), sep='')
