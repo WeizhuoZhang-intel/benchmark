@@ -4,6 +4,7 @@ import os
 import copy
 import csv
 import dataclasses
+import functools
 import io
 import json
 import multiprocessing
@@ -14,9 +15,13 @@ from datetime import datetime, timedelta
 import sys
 import torch
 import uuid
+import warnings
 
 from pathlib import Path
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 from typing import Any, Dict, List, Optional, Tuple
+
+MODEL_PATH_TEMPLATE = "torchbenchmark.models.{}.Model"
 
 def output_csv(filename, headers, row):
     assert filename
@@ -33,8 +38,6 @@ def output_csv(filename, headers, row):
         output.writerow(headers)
     output.writerow([(f"{x:.4f}" if isinstance(x, float) else x) for x in row])
 
-
-
 def parse_args(args: List[str]=None):
     parser = argparse.ArgumentParser(description='Submitit for PyTorch Distributed Benchmark', add_help=False)
 
@@ -47,9 +50,19 @@ def parse_args(args: List[str]=None):
 
     parser.add_argument(
         "--nodes",
-        default=1,
+        default=None,
         type=int,
-        help="Number of nodes to request"
+        action="extend",
+        nargs="+",
+        help="Number of nodes to request. Provide a list of nodes to test, e.g. `--nodes 8 4 2 1 --next_arg..."
+    )
+    parser.add_argument(
+        "--filter_models",
+        default=None,
+        type=str,
+        action="extend",
+        nargs="+",
+        help="List of models to test, e.g. --filter hf_T5 hf_T5_large resnet50"
     )
 
     parser.add_argument(
@@ -87,18 +100,6 @@ def parse_args(args: List[str]=None):
         help="A shared folder across all worker processes"
     )
 
-    parser.add_argument(
-        "--model",
-        type=str,
-        default="torchbenchmark.models.hf_Bert.Model",
-        help="specify the model to experiment with, by default uses e2e_models.hf_bert"
-    )
-    parser.add_argument(
-        "--batch_size",
-        type=int,
-        default=32,
-        help="specify the batch size of the input"
-    )
     parser.add_argument(
         "--trainer",
         type=str,
@@ -187,7 +188,7 @@ class ExperimentParams:
 # used for labeling filenames for correctness checks
 def serialize_config(config: Dict):
     keys = ["nodes", "model_name", "backend", "has_breaks"]
-    return "-".join([f"{k}_{config[k]}" for k in keys])
+    return "-".join([f"{k}_{config[k]}" for k in keys if k in config])
 
 
 @dataclasses.dataclass
@@ -364,53 +365,55 @@ class TrainerWrapper(object):
         os.environ["NET_TYPE"] = 'efa'
         os.environ["ADAM_CAPTURABLE"] = str(1)
 
+def get_node_list(args):
+    node_list = args.nodes
+    if node_list is None:
+        # run the 8-node version first so that all the caches get warmed up at the same time.
+        node_list = [8, 4, 2, 1]
+    return node_list
 
-def main():
-    args = parse_args()
+# takes `models` as a list of models in shortened form (i.e. not containing MODEL_PATH_TEMPLATE).
+def filter_models(args, models: List[str]):
+    if args.filter_models is None:
+        return models
+    final_models = []
+    for m in args.filter_models:
+        if m in models:
+            final_models.append(m)
+        else:
+            warnings.warn(f"Model {m} was specified but is unsupported.")
 
-    # Note that the folder will depend on the job_id, to easily track experiments
-    executor = submitit.AutoExecutor(folder=args.job_dir, slurm_max_num_timeout=3000)
+    return final_models
 
-    executor.update_parameters(
-        gpus_per_node=args.ngpus,
-        # one task per GPU
-        tasks_per_node=args.ngpus,
-        cpus_per_task=12,
-        nodes=args.nodes,
-        timeout_min=args.timeout,
-        # Below are cluster dependent parameters
-        slurm_partition=args.partition if args.nodes < 16 else 'scavenge',
-        slurm_signal_delay_s=120,
-        slurm_exclude=args.exclude,
-    )
 
-    executor.update_parameters(name="distbench", slurm_array_parallelism=1, timeout_min=1000)
-
-    models = [
-        'torchbenchmark.models.hf_Bert.Model',
-        'torchbenchmark.models.hf_GPT2_large.Model',
-        'torchbenchmark.models.hf_T5_large.Model',
-        'torchbenchmark.models.timm_vision_transformer_large.Model',
-        'torchbenchmark.models.hf_T5.Model',
-        'torchbenchmark.models.resnet50.Model',
+def benchmark_ddp(args, executor):
+    available_models = [
+        'hf_Bert',
+        'hf_GPT2_large',
+        'hf_T5_large',
+        'timm_vision_transformer_large',
+        'hf_T5',
+        'resnet50',
     ]
 
+    models = [MODEL_PATH_TEMPLATE.format(m) for m in filter_models(args, available_models)]
+
     model_batch_size = {
-        'torchbenchmark.models.hf_Bert.Model': 32,
-        'torchbenchmark.models.hf_GPT2_large.Model': 4,
-        'torchbenchmark.models.hf_T5_large.Model': 4,
-        'torchbenchmark.models.timm_vision_transformer_large.Model': 16,
-        'torchbenchmark.models.hf_T5.Model': 12,
-        'torchbenchmark.models.resnet50.Model': 128,
+        'hf_Bert': 32,
+        'hf_GPT2_large': 4,
+        'hf_T5_large': 4,
+        'timm_vision_transformer_large': 16,
+        'hf_T5': 12,
+        'resnet50': 128,
     }
+    model_batch_size = {MODEL_PATH_TEMPLATE.format(k): v for k, v in model_batch_size.items()}
     # put eager first to ensure it can be used for reference values.
     # try --torchdynamo eager or --torchdynamo aot_eager for debugging
     model_args_configs = [
         [],  # no args = pure eager baseline
         ["--torchdynamo", "inductor"],
     ]
-    # run the 8-node version first so that all the caches get warmed up at the same time.
-    node_list = [8, 4, 2, 1]
+    node_list = get_node_list(args)
 
     def get_backend_name(model_args):
         if "--torchdynamo" in model_args:
@@ -461,16 +464,7 @@ def main():
 
     allocation_nodes = max(node_list)
     executor.update_parameters(
-        gpus_per_node=args.ngpus,
-        # one task per GPU
-        tasks_per_node=args.ngpus,
-        cpus_per_task=12,
         nodes=allocation_nodes,
-        timeout_min=args.timeout,
-        # Below are cluster dependent parameters
-        slurm_partition=args.partition,
-        slurm_signal_delay_s=120,
-        slurm_exclude=args.exclude,
     )
     job_config = JobConfig(
         outer_sync_path=str(get_init_file(args))
@@ -487,6 +481,190 @@ def main():
 
     # waits for completion and returns output
     print(job.results())
+
+def apply_fsdp(model, trainer, auto_wrap_policy):
+    from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+    assert trainer == "fsdp"
+    fsdp_model = FSDP(
+        model,
+        auto_wrap_policy=auto_wrap_policy,
+        device_id=torch.cuda.current_device(),
+        use_orig_params=True,
+    )
+    return fsdp_model
+
+def apply_fsdp_hf_T5_large(model, trainer):
+    from transformers.models.t5.modeling_t5 import T5Block
+    return apply_fsdp(
+        model,
+        trainer,
+        functools.partial(transformer_auto_wrap_policy, transformer_layer_cls=(T5Block,)),
+    )
+
+def apply_fsdp_hf_GPT2_large(model, trainer):
+    from transformers.models.gpt2.modeling_gpt2 import GPT2Block
+    return apply_fsdp(
+        model,
+        trainer,
+        functools.partial(transformer_auto_wrap_policy, transformer_layer_cls=(GPT2Block,)),
+    )
+
+def apply_fsdp_hf_Bert_large(model, trainer):
+    from transformers.models.bert.modeling_bert import BertLayer
+    return apply_fsdp(
+        model,
+        trainer,
+        functools.partial(transformer_auto_wrap_policy, transformer_layer_cls=(BertLayer,)),
+    )
+
+def apply_fsdp_timm_VIT_large(model, trainer):
+    from timm.models.vision_transformer import Block
+    return apply_fsdp(
+        model,
+        trainer,
+        functools.partial(transformer_auto_wrap_policy, transformer_layer_cls=(Block,)),
+    )
+
+def benchmark_fsdp(args, executor):
+    def get_backend_name(model_args):
+        if "--torchdynamo" in model_args:
+            return "torchdynamo_" + model_args[model_args.index("--torchdynamo") + 1]
+        return "eager"
+
+    def generic_setup(nodes, model_args):
+        backend_name = get_backend_name(model_args)
+        copied_model_args = copy.copy(model_args)
+        if "inductor" in backend_name:
+            copied_model_args.extend(["--torchinductor_cudagraph", "False"])
+        if backend_name != "eager":
+            copied_model_args.extend(["--dynamo_disable_optimizer_step", "True"])
+        copied_model_args.append("--skip_correctness")
+        if args.check_correctness_distributed and "inductor" in backend_name:
+            copied_model_args.extend(["--torchinductor_fallback_random", "True"])
+
+        args_copy = copy.deepcopy(args)
+
+        args_copy.nodes = nodes
+        args_copy.dist_url = get_init_file(args).as_uri()
+        args_copy.output_dir = args.job_dir
+
+        return args_copy, copied_model_args
+
+    def fsdp_is_reference(backend_name):
+        return backend_name == "eager"
+
+    def get_model_config(
+        nodes,
+        model_args,
+        model_name,
+        wrap_fn,
+        batch_size_per_nodes,
+    ):
+        model_path = MODEL_PATH_TEMPLATE.format(model_name)
+        args_copy, copied_model_args = generic_setup(nodes, model_args)
+        copied_model_args.extend(["--distributed_wrap_fn", wrap_fn])
+
+        assert nodes in batch_size_per_nodes
+        args_copy.batch_size = batch_size_per_nodes[nodes]
+        args_copy.model = model_path
+
+        backend_name = get_backend_name(model_args)
+        config = {
+            "nodes": nodes,
+            "model_name": model_name,
+            "backend": backend_name,
+        }
+        return ExperimentParams(config, args_copy, copied_model_args, is_reference=fsdp_is_reference(backend_name))
+
+    model_configs = {
+        "timm_vision_transformer_large": functools.partial(
+            get_model_config,
+            model_name="timm_vision_transformer_large",
+            wrap_fn="userbenchmark.ddp_experiments.apply_fsdp_timm_VIT_large",
+            batch_size_per_nodes={1: 6, 2: 6, 4: 6, 8: 6},
+        ),
+        "hf_GPT2_large": functools.partial(
+            get_model_config,
+            model_name="hf_GPT2_large",
+            wrap_fn="userbenchmark.ddp_experiments.apply_fsdp_hf_GPT2_large",
+            batch_size_per_nodes={1: 6, 2: 6, 4: 6, 8: 6},
+        ),
+        "hf_Bert_large": functools.partial(
+            get_model_config,
+            model_name="hf_Bert_large",
+            wrap_fn="userbenchmark.ddp_experiments.apply_fsdp_hf_Bert_large",
+            batch_size_per_nodes={1: 16, 2: 16, 4: 16, 8: 16},
+        ),
+        "hf_T5_large": functools.partial(
+            get_model_config,
+            model_name="hf_T5_large",
+            wrap_fn="userbenchmark.ddp_experiments.apply_fsdp_hf_T5_large",
+            batch_size_per_nodes={1: 6, 2: 6, 4: 6, 8: 6},
+        ),
+    }
+
+    selected_models = filter_models(args, [k for k, _ in model_configs.items()])
+    model_configs = {k: v for k, v in model_configs.items() if k in selected_models}
+
+    model_args_configs = [
+        [],  # no args = pure eager baseline
+        ["--torchdynamo", "inductor"],
+    ]
+
+    node_list = get_node_list(args)
+
+    experiments = []
+    for i in range(args.repeat):
+        for nodes in node_list:
+            for model_name, config_generator in model_configs.items():
+                for model_args in model_args_configs:
+                    experiments.append(config_generator(nodes, model_args))
+
+    allocation_nodes = max(node_list)
+    executor.update_parameters(
+        nodes=allocation_nodes,
+    )
+    job_config = JobConfig(
+        outer_sync_path=str(get_init_file(args))
+    )
+    job = executor.submit(TrainerWrapper(job_config, experiments))
+
+    # print ID of the Slurm job
+    print(f"{allocation_nodes} nodes: {job.job_id}")
+    output_csv(
+        args.index_file,
+        ("job_id",),
+        (job.job_id,),
+    )
+
+    # waits for completion and returns output
+    print(job.results())
+
+
+def main():
+    args = parse_args()
+
+    # Note that the folder will depend on the job_id, to easily track experiments
+    executor = submitit.AutoExecutor(folder=args.job_dir, slurm_max_num_timeout=3000)
+
+    executor.update_parameters(
+        gpus_per_node=args.ngpus,
+        # one task per GPU
+        tasks_per_node=args.ngpus,
+        cpus_per_task=12,
+        timeout_min=args.timeout,
+        # Below are cluster dependent parameters
+        slurm_partition=args.partition,
+        slurm_signal_delay_s=120,
+        slurm_exclude=args.exclude,
+    )
+
+    executor.update_parameters(name="distbench", slurm_array_parallelism=1, timeout_min=1000)
+
+    if "ddp" in args.distributed:
+        benchmark_ddp(args, executor)
+    elif "fsdp" in args.distributed:
+        benchmark_fsdp(args, executor)
 
 
 if __name__=="__main__":

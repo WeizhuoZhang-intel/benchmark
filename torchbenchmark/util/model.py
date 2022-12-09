@@ -1,4 +1,5 @@
 import copy
+import importlib
 import os
 import torch
 from contextlib import contextmanager, ExitStack
@@ -157,7 +158,13 @@ class BenchmarkModel(metaclass=PostInitProcessor):
             # in this case, use more relaxed cosine similarity instead of torch.allclose
             # for correctness testing
             # see: https://github.com/pytorch/torchdynamo/pull/438
-            if self.dargs.precision == "fp16" or (self.dynamo and self.opt_args.torchdynamo == "fx2trt") or (not self.dynamo and self.opt_args.fx2trt) or (not self.dynamo and self.opt_args.use_cosine_similarity):
+            if (
+                self.dargs.precision == "fp16"
+                or self.dargs.precision == "amp"
+                or (self.dynamo and self.opt_args.torchdynamo == "fx2trt")
+                or (not self.dynamo and self.opt_args.fx2trt)
+                or (not self.dynamo and self.opt_args.use_cosine_similarity)
+            ):
                 self.correctness = correctness_check(self, cos_sim=True, deepcopy=self.DEEPCOPY)
             else:
                 # get tolerance of correctness check from os.environ
@@ -166,7 +173,12 @@ class BenchmarkModel(metaclass=PostInitProcessor):
                 self.correctness = correctness_check(self, cos_sim=False, deepcopy=self.DEEPCOPY, atol=atol, rtol=rtol)
         # setup distributed trainer
         if self.dargs.distributed:
-            from torchbenchmark.util.distributed.core_model.apply_trainer import apply_trainer
+            if self.dargs.distributed_wrap_fn:
+                pos = self.dargs.distributed_wrap_fn.rfind(".")
+                module = importlib.import_module(self.dargs.distributed_wrap_fn[:pos])
+                apply_trainer = getattr(module, self.dargs.distributed_wrap_fn[(pos+1):])
+            else:
+                from torchbenchmark.util.distributed.core_model.apply_trainer import apply_trainer
             if is_hf_model(self):
                 # DDP requires to use unwrapped model for huggingface
                 module, _inputs = self.get_module(wrap_model=False)
