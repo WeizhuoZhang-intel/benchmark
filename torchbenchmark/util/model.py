@@ -9,10 +9,10 @@ import yaml
 from pathlib import Path
 from typing import ContextManager, Optional, List, Tuple, Generator
 from torchbenchmark import REPO_PATH
-from torchbenchmark.util.extra_args import check_correctness_p, is_hf_model, parse_opt_args, apply_opt_args, \
+from torchbenchmark.util.extra_args import check_correctness_p, parse_opt_args, apply_opt_args, \
                                            parse_decoration_args, apply_decoration_args, is_staged_train_test, \
                                            TEST_STAGE
-from torchbenchmark.util.env_check import set_random_seed, correctness_check, stableness_check
+from torchbenchmark.util.env_check import set_random_seed, correctness_check, stableness_check, is_hf_model
 
 class PostInitProcessor(type):
     def __call__(cls, *args, **kwargs):
@@ -82,6 +82,7 @@ class BenchmarkModel(metaclass=PostInitProcessor):
         self.jit = jit
         self.determine_batch_size(batch_size)
         self.extra_args = extra_args
+        self.opt = None
         # contexts to run in the test function
         if self.test == "train":
             # In train test, there are run contexts that should only be applied for forward/backward/optimizer stage
@@ -122,6 +123,8 @@ class BenchmarkModel(metaclass=PostInitProcessor):
 
     # Run the post processing for model acceleration
     def __post__init__(self):
+        # All arguments should be parsed at this point.
+        assert not self.extra_args, f"Exptected no unknown args at this point, found {self.extra_args}"
         should_check_correctness = check_correctness_p(self, self.opt_args, self.dargs)
         if should_check_correctness:
             self.eager_output = stableness_check(self, cos_sim=False, deepcopy=self.DEEPCOPY, rounds=1)
@@ -152,7 +155,7 @@ class BenchmarkModel(metaclass=PostInitProcessor):
             from torchbenchmark.util.backends.torchdynamo import apply_torchdynamo_args
             apply_torchdynamo_args(self, self.opt_args, self.dargs.precision)
         else:
-            apply_opt_args(self, self.opt_args, self.extra_args)
+            apply_opt_args(self, self.opt_args)
         if should_check_correctness:
             # tensorrt or fp16 is known to generate less-accurate results
             # in this case, use more relaxed cosine similarity instead of torch.allclose
@@ -162,7 +165,7 @@ class BenchmarkModel(metaclass=PostInitProcessor):
                 self.dargs.precision == "fp16"
                 or self.dargs.precision == "amp"
                 or (self.dynamo and self.opt_args.torchdynamo == "fx2trt")
-                or (not self.dynamo and self.opt_args.fx2trt)
+                or (not self.dynamo and (self.device == "cuda" and self.opt_args.backend == "fx2trt"))
                 or (not self.dynamo and self.opt_args.use_cosine_similarity)
             ):
                 self.correctness = correctness_check(self, cos_sim=True, deepcopy=self.DEEPCOPY)

@@ -77,6 +77,8 @@ def printResultSummaryTime(result_summary, metrics_needed=[], metrics_backend_ma
         print('{:<20} {:>20}'.format("CPU Total Wall Time:", "%.3f milliseconds" % cpu_walltime, sep=''))
         print("Throughput: {:.2f} images/s".format(throughput))				
 
+    if model_analyzer:
+        model_analyzer.aggregate()
     # if model_flops is not None, output the TFLOPs per sec
     if 'flops' in metrics_needed:
         if metrics_backend_mapping['flops'] == 'dcgm':
@@ -182,7 +184,6 @@ def run_one_step(func, nwarmup=WARMUP_ROUNDS, num_iter=10, model=None, export_me
 
     if model_analyzer is not None:
         model_analyzer.stop_monitor()
-        model_analyzer.aggregate()
 
     printResultSummaryTime(result_summary, metrics_needed, metrics_backend_mapping, model, model_analyzer)
 
@@ -292,7 +293,6 @@ if __name__ == "__main__":
     parser.add_argument("--cudastreams", action="store_true",
                         help="Utilization test using increasing number of cuda streams.")
     parser.add_argument("--bs", type=int, help="Specify batch size to the test.")
-    parser.add_argument("--flops", choices=["fvcore", "dcgm"], help="Return the flops result.")
     parser.add_argument("--export-metrics", action="store_true",
                         help="Export all specified metrics records to a csv file. The default csv file name is [model_name]_all_metrics.csv.")
     parser.add_argument("--stress", type=float, default=0, help="Specify execution time (seconds) to stress devices.")
