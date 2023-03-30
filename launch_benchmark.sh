@@ -13,9 +13,8 @@ hf_models="hf_Albert,hf_Bart,hf_Bert,hf_BigBird,hf_DistilBert,hf_GPT2,hf_GPT2_la
 timm_models="timm_efficientnet,timm_nfnet,timm_regnet,timm_resnest,timm_vision_transformer,timm_vision_transformer_large,timm_vovnet"
 channels_last_models="dcgan,mobilenet_v2_quantized_qat,pytorch_unet,resnet50_quantized_qat,yolov3"
 time_long_models="LearningToPaint,maml,speech_transformer"
-other_models="attention_is_all_you_need_pytorch,BERT_pytorch,demucs,dlrm,drq,fastNLP_Bert,maml_omniglot,nvidia_deeprecommender,opacus_cifar10, \
-                pyhpc_equation_of_state,pyhpc_isoneutral_mixing,pyhpc_turbulent_kinetic_energy,pytorch_CycleGAN_and_pix2pix,pytorch_stargan, \
-                soft_actor_critic,Super_SloMo,tacotron2,tts_angular,vision_maskrcnn"
+other_models="attention_is_all_you_need_pytorch,BERT_pytorch,demucs,dlrm,drq,fastNLP_Bert,nvidia_deeprecommender,opacus_cifar10, \
+                pyhpc_equation_of_state,pyhpc_isoneutral_mixing,pytorch_CycleGAN_and_pix2pix, Super_SloMo,tts_angular,vision_maskrcnn"
 functorch_models="functorch_dp_cifar10,functorch_maml_omniglot,lennard_jones"
 not_implemented_models="Background_Matting,DALLE2_pytorch,fambench_xlmr,moco,pytorch_struct,timm_efficientdet"
 
