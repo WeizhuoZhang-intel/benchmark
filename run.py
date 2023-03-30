@@ -164,7 +164,6 @@ def run_one_step(func, nwarmup=WARMUP_ROUNDS, num_iter=10, model=None, export_me
     mem_device_id = None
     if 'cpu_peak_mem' in metrics_needed or 'gpu_peak_mem' in metrics_needed:
         cpu_peak_mem, mem_device_id, gpu_peak_mem = get_peak_memory(func, model.device, export_metrics_file=export_metrics_file, metrics_needed=metrics_needed, metrics_gpu_backend=metrics_gpu_backend)
->>>>>>> upstream/main
 
     printResultSummaryTime(result_summary, metrics_needed, model, flops_model_analyzer, cpu_peak_mem, mem_device_id, gpu_peak_mem)
 
