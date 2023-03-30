@@ -1,5 +1,6 @@
 set -x
 
+pip install pynvml
 #bash launch_benchmark.sh all throughput "--num-iter 1"
 #bash launch_benchmark.sh time_long throughput "--num-iter 1"
 
