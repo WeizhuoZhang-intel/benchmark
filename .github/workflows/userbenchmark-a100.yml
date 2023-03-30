@@ -12,6 +12,8 @@ env:
   CONDA_ENV_NAME: "userbenchmarks-ci"
   PLATFORM_NAME: "gcp_a100"
   TORCHBENCH_USERBENCHMARK_SCRIBE_GRAPHQL_ACCESS_TOKEN: ${{ secrets.TORCHBENCH_USERBENCHMARK_SCRIBE_GRAPHQL_ACCESS_TOKEN }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   SETUP_SCRIPT: "/workspace/setup_instance.sh"
 jobs:
   run-userbenchmark:
@@ -59,8 +61,6 @@ jobs:
         run: |
           set -x
           . "${SETUP_SCRIPT}" && conda activate "${CONDA_ENV_NAME}"
-          export LC_ALL=en_US.UTF-8
-          export LANG=en_US.UTF-8
           # remove old results
           if [ -d benchmark-output ]; then rm -Rf benchmark-output; fi
           pushd benchmark
@@ -69,12 +69,16 @@ jobs:
           if [ -z "${MANUAL_WORKFLOW}" ]; then
             # Figure out what userbenchmarks we should run, and run it
             python ./.github/scripts/userbenchmark/schedule-benchmarks.py --platform ${PLATFORM_NAME}
-            cp -r ./.userbenchmark ../benchmark-output
+            if [ -d ./.userbenchmark ]; then
+              cp -r ./.userbenchmark ../benchmark-output
+            else
+              mkdir ../benchmark-output
+            fi
           else
             python run_benchmark.py "${{ github.event.inputs.userbenchmark_name }}" ${{ github.event.inputs.userbenchmark_options }}
             cp -r ./.userbenchmark/"${{ github.event.inputs.userbenchmark_name }}" ../benchmark-output
           fi
-      - name: Upload result jsons to Scribe
+      - name: Upload result jsons to Scribe and S3
         run: |
           . "${SETUP_SCRIPT}" && conda activate "${CONDA_ENV_NAME}"
           pushd benchmark
@@ -82,6 +86,7 @@ jobs:
           echo "Uploading result jsons: ${RESULTS}"
           for r in ${RESULTS[@]}; do
             python ./scripts/userbenchmark/upload_scribe.py --userbenchmark_json "${r}" --userbenchmark_platform "${PLATFORM_NAME}"
+            python ./scripts/userbenchmark/upload_s3.py --userbenchmark_json "${r}" --userbenchmark_platform "${PLATFORM_NAME}"
           done
       - name: Upload artifact
         uses: actions/upload-artifact@v3

@@ -19,9 +19,6 @@ conda install -y python=3.10
 # Or, using a new conda environment:
 conda create -n torchbenchmark python=3.10
 conda activate torchbenchmark
-# We depend on git lfs tool to store minimal input dataset such as images and annotations.
-# The total size of input dataset is ~20 MB
-conda install -y git-lfs
 ```
 
 If you are running NVIDIA GPU tests, we support CUDA 11.7+, and use CUDA 11.7 as default:
@@ -31,7 +28,7 @@ conda install -y -c pytorch magma-cuda117
 
 Then install pytorch, torchtext, torchvision, and torchaudio using conda:
 ```
-conda install pytorch torchvision torchaudio pytorch-cuda=11.7 -c pytorch-nightly -c nvidia
+conda install pytorch torchvision torchtext torchaudio pytorch-cuda=11.7 -c pytorch-nightly -c nvidia
 ```
 Or use pip:
 (but don't mix and match pip and conda for the torch family of libs! - [see notes below](#notes))
@@ -46,8 +43,8 @@ pip install pyyaml
 
 Install the benchmark suite, which will recursively install dependencies for all the models.  Currently, the repo is intended to be installed from the source tree.
 ```
-git clone <benchmark>
-cd <benchmark>
+git clone https://github.com/pytorch/benchmark
+cd benchmark
 python install.py
 ```
 
@@ -58,8 +55,8 @@ See detailed instructions to install torchtext [here](https://github.com/pytorch
 Make sure to enable CUDA (by `FORCE_CUDA=1`) if using CUDA.
 Then,
 ```
-git clone <benchmark>
-cd <benchmark>
+git clone https://github.com/pytorch/benchmark
+cd benchmark
 python install.py
 ```
 

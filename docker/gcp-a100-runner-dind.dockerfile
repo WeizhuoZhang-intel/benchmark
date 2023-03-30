@@ -5,9 +5,13 @@ FROM ${BASE_IMAGE}
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 RUN sudo apt-get -y update
-RUN sudo apt-get install -y git git-lfs jq \
+RUN sudo apt-get install -y git jq \
                             vim wget curl ninja-build cmake \
                             libgl1-mesa-glx libsndfile1-dev
+
+# Install gcc-11, needed by the latest fbgemm
+RUN sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test && \
+    sudo apt install -y g++-11
 
 # get switch-cuda utility
 RUN sudo wget -q https://raw.githubusercontent.com/phohenecker/switch-cuda/master/switch-cuda.sh -O /usr/bin/switch-cuda.sh

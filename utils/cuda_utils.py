@@ -92,12 +92,8 @@ def install_torch_deps(cuda_version: str):
     cmd = ["conda", "install", "-y", magma_pkg, "-c", "pytorch"]
     subprocess.check_call(cmd)
     # install other dependencies
-    torch_deps = ["numpy", "requests", "ninja", "pyyaml", "setuptools", "gitpython", "beautifulsoup4", "regex", "git-lfs"]
+    torch_deps = ["numpy", "requests", "ninja", "pyyaml", "setuptools", "gitpython", "beautifulsoup4", "regex"]
     cmd = ["conda", "install", "-y"] + torch_deps
-    subprocess.check_call(cmd)
-    # install deps from conda-forge
-    # model doctr_reco_predictor needs weasyprint, which needs libglib and pango
-    cmd = ["conda", "install", "-y", "expecttest", "libglib", "pango", "-c", "conda-forge"]
     subprocess.check_call(cmd)
     # install unittest-xml-reporting
     cmd = ["pip", "install", "unittest-xml-reporting"]
