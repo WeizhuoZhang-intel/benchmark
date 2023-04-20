@@ -30,7 +30,8 @@ class TorchVisionModel(BenchmarkModel):
         self.example_inputs = (torch.randn((self.batch_size, 3, 224, 224)).to(self.device), )
         if test == "train":
             # compute loss
-            self.example_outputs = (torch.rand_like(self.model(*self.example_inputs)), )
+            with torch.no_grad():
+                self.example_outputs = (torch.rand_like(self.model(*self.example_inputs)), )
             self.model.train()
             # setup optimizer and loss_fn
             # if backend is cudagraph, must set optimizer to be capturable
@@ -42,7 +43,7 @@ class TorchVisionModel(BenchmarkModel):
             self.model.eval()
 
         self.amp_context = nullcontext
-        if self.opt_args.backend == "cudagraph":
+        if hasattr(self.opt_args, 'backend') and self.opt_args.backend == "cudagraph":
             self.real_input = ( torch.rand_like(self.example_inputs[0]), )
             self.real_output = ( torch.rand_like(self.example_outputs), )
 
@@ -100,6 +101,6 @@ class TorchVisionModel(BenchmarkModel):
         return (self.example_outputs, )
 
     def enable_amp(self):
-        if not self.dynamo and self.opt_args.cudagraph:
+        if hasattr(self.opt_args, 'backend') and self.opt_args.backend == "cudagraph":
             return NotImplementedError("AMP not implemented for cudagraphs")
         self.amp_context = lambda: torch.cuda.amp.autocast(dtype=torch.float16)

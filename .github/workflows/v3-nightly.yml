@@ -1,28 +1,27 @@
-name: TorchBench Userbenchmark on A100
+name: TorchBench V3 nightly (A100)
 on:
+  workflow_dispatch:
   schedule:
     - cron: '0 14 * * *' # run at 2 PM UTC
-  workflow_dispatch:
-    inputs:
-      userbenchmark_name:
-        description: "Name of the user benchmark to run"
-      userbenchmark_options:
-        description: "Option of the user benchmark to run"
-env:
-  CONDA_ENV_NAME: "userbenchmarks-ci"
-  PLATFORM_NAME: "gcp_a100"
-  TORCHBENCH_USERBENCHMARK_SCRIBE_GRAPHQL_ACCESS_TOKEN: ${{ secrets.TORCHBENCH_USERBENCHMARK_SCRIBE_GRAPHQL_ACCESS_TOKEN }}
-  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-  SETUP_SCRIPT: "/workspace/setup_instance.sh"
+
 jobs:
-  run-userbenchmark:
+  run-benchmark:
+    env:
+      CONDA_ENV_NAME:  "torchbench-v3-nightly-ci"
+      PLATFORM_NAME: "gcp_a100"
+      SETUP_SCRIPT: "/workspace/setup_instance.sh"
+      TORCHBENCH_USERBENCHMARK_SCRIBE_GRAPHQL_ACCESS_TOKEN: ${{ secrets.TORCHBENCH_USERBENCHMARK_SCRIBE_GRAPHQL_ACCESS_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      IS_GHA: 1
+      BUILD_ENVIRONMENT: benchmark-nightly
+    if: ${{ github.repository_owner == 'pytorch' }}
     runs-on: [self-hosted, a100-runner]
-    timeout-minutes: 1440 # 24 hours
     steps:
-      - name: Checkout TorchBench
+      - name: Checkout TorchBench v3.0 branch
         uses: actions/checkout@v3
         with:
+          ref: v3.0
           path: benchmark
       - name: Create conda environment
         run: |
@@ -57,43 +56,32 @@ jobs:
           . "${SETUP_SCRIPT}" && conda activate "${CONDA_ENV_NAME}"
           pushd benchmark
           python install.py
-      - name: Run user benchmark
+      - name: Run the torch-nightly userbenchmark
         run: |
-          set -x
           . "${SETUP_SCRIPT}" && conda activate "${CONDA_ENV_NAME}"
           # remove old results
           if [ -d benchmark-output ]; then rm -Rf benchmark-output; fi
           pushd benchmark
           if [ -d .userbenchmark ]; then rm -Rf .userbenchmark; fi
-          MANUAL_WORKFLOW="${{ github.event.inputs.userbenchmark_name }}"
-          if [ -z "${MANUAL_WORKFLOW}" ]; then
-            # Figure out what userbenchmarks we should run, and run it
-            python ./.github/scripts/userbenchmark/schedule-benchmarks.py --platform ${PLATFORM_NAME}
-            if [ -d ./.userbenchmark ]; then
-              cp -r ./.userbenchmark ../benchmark-output
-            else
-              mkdir ../benchmark-output
-            fi
-          else
-            python run_benchmark.py "${{ github.event.inputs.userbenchmark_name }}" ${{ github.event.inputs.userbenchmark_options }}
-            cp -r ./.userbenchmark/"${{ github.event.inputs.userbenchmark_name }}" ../benchmark-output
-          fi
-      - name: Upload result jsons to Scribe and S3
+          python run_benchmark.py torch-nightly -c v3-cuda-tests.yaml
+          cp -r ./.userbenchmark/torch-nightly ../benchmark-output
+      - name: Copy artifact and upload to scribe and Amazon S3
         run: |
           . "${SETUP_SCRIPT}" && conda activate "${CONDA_ENV_NAME}"
+          TODAY=$(date "+%Y%m%d%H%M%S")
           pushd benchmark
-          RESULTS=($(find ${PWD}/../benchmark-output -name "metrics-*.json" -maxdepth 2 | sort -r))
-          echo "Uploading result jsons: ${RESULTS}"
-          for r in ${RESULTS[@]}; do
-            python ./scripts/userbenchmark/upload_scribe.py --userbenchmark_json "${r}" --userbenchmark_platform "${PLATFORM_NAME}"
-            python ./scripts/userbenchmark/upload_s3.py --userbenchmark_json "${r}" --userbenchmark_platform "${PLATFORM_NAME}"
-          done
-      - name: Upload artifact
+          LATEST_RESULT=$(find ../benchmark-output/ -name "metrics-*.json" | sort -r | head -1)
+          echo "Benchmark result file: ${LATEST_RESULT}"
+          # Upload the result json to Scribe
+          python ./scripts/userbenchmark/upload_scribe.py --userbenchmark_json "${LATEST_RESULT}" --userbenchmark_platform "${PLATFORM_NAME}"
+          # Upload the result json to Amazon S3
+          python ./scripts/userbenchmark/upload_s3.py --userbenchmark_json "${LATEST_RESULT}" --userbenchmark_platform "${PLATFORM_NAME}"
+      - name: Upload result to GH Actions Artifact
         uses: actions/upload-artifact@v3
         with:
-          name: TorchBench result
+          name: TorchBench V3 result
           path: benchmark-output/
-      - name: Remove conda environment
+      - name: Destroy conda env
         run: |
           . "${SETUP_SCRIPT}"
           conda env remove --name "${CONDA_ENV_NAME}"
