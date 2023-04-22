@@ -53,7 +53,7 @@ elif [ ${numa_mode} == "throughput_bs1" ]; then
     num_instances=1
     batch_size=1
 fi
-numa_launch_header=" python -m launch --node_id 0 --ninstances ${num_instances} --ncore_per_instance ${ncpi} --log_path=${OUTPUT_DIR}"
+numa_launch_header=" python -m launch --node_id 1 --ninstances ${num_instances} --ncore_per_instance ${ncpi} --log_path=${OUTPUT_DIR}"
 
 export LD_PRELOAD=${CONDA_PREFIX}/lib/libjemalloc.so
 export LD_PRELOAD=${LD_PRELOAD}:${CONDA_PREFIX}/lib/libiomp5.so
