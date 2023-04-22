@@ -23,4 +23,12 @@ do
     bash launch_benchmark.sh "time_long" ${mode} "--num-iter 20 -m eager --channels-last"
     #bash launch_benchmark.sh "all" ${mode} "-m jit --channels-last"
     #bash launch_benchmark.sh "time_long" ${mode} "--num-iter 20 -m jit --channels-last"
+
+    # LLGA path
+    bash launch_benchmark.sh "all" ${mode} "-m jit --channels-last --fuser fuser3 "
+    bash launch_benchmark.sh "time_long" ${mode} "--num-iter 20 -m jit --channels-last --fuser fuser3 "
+
+    # FX INT8 path
+    bash launch_benchmark.sh "all" ${mode} "--precision fx_int8 -m jit"
+    bash launch_benchmark.sh "time_long" ${mode} "--num-iter 20 --precision fx_int8 -m jit "
 done
