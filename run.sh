@@ -15,12 +15,12 @@ mode_list=($(echo "${mode_all}" |sed 's/,/ /g'))
 
 for mode in ${mode_list[@]}
 do
-    bash launch_benchmark.sh "all" ${mode} "-m eager"
-    bash launch_benchmark.sh "time_long" ${mode} "--num-iter 20 -m eager"
-    bash launch_benchmark.sh "all" ${mode} "-m jit "
-    bash launch_benchmark.sh "time_long" ${mode} "--num-iter 20 -m jit "
+    #bash launch_benchmark.sh "all" ${mode} "-m eager"
+    #bash launch_benchmark.sh "time_long" ${mode} "--num-iter 20 -m eager"
+    #bash launch_benchmark.sh "all" ${mode} "-m jit "
+    #bash launch_benchmark.sh "time_long" ${mode} "--num-iter 20 -m jit "
     bash launch_benchmark.sh "all" ${mode} "-m eager --channels-last"
     bash launch_benchmark.sh "time_long" ${mode} "--num-iter 20 -m eager --channels-last"
-    bash launch_benchmark.sh "all" ${mode} "-m jit --channels-last"
-    bash launch_benchmark.sh "time_long" ${mode} "--num-iter 20 -m jit --channels-last"
+    #bash launch_benchmark.sh "all" ${mode} "-m jit --channels-last"
+    #bash launch_benchmark.sh "time_long" ${mode} "--num-iter 20 -m jit --channels-last"
 done
