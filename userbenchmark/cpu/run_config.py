@@ -11,6 +11,10 @@ from typing import List, Dict, Optional
 from pathlib import Path
 
 from cpu_utils import add_path, REPO_PATH, validate, parse_str_to_list, list_metrics, get_output_dir, get_output_json, dump_output
+
+WARMUP_ROUNDS = 10
+BENCHMARK_ITERS = 15
+
 with add_path(str(REPO_PATH)):
     from torchbenchmark.util.experiment.instantiator import (list_models, load_model, load_model_isolated, TorchBenchModelConfig,
                                                             list_devices, list_tests)
@@ -46,7 +50,7 @@ with add_path(str(REPO_PATH)):
         result = get_output_json(BM_NAME, metrics)
         dump_output(BM_NAME, result, output_dir)
 
-    def run_config(config: TorchBenchModelConfig, metrics: List[str], dryrun: bool=False, profile: bool=False) -> Optional[TorchBenchModelMetrics]:
+    def run_config(config: TorchBenchModelConfig, metrics: List[str], dryrun: bool=False, profile: bool=False, nwarmup=WARMUP_ROUNDS, num_iter=BENCHMARK_ITERS) -> Optional[TorchBenchModelMetrics]:
         """This function only handles NotImplementedError, all other errors will fail."""
         print(f"Running {config} ...", end='')
         if dryrun:
@@ -63,10 +67,10 @@ with add_path(str(REPO_PATH)):
             if profile:
                 print("[INFO] Collecting Profiling logs...")
                 with profiler.profile(activities=[profiler.ProfilerActivity.CPU]) as prof, profiler.record_function("model_inference"):
-                    result: TorchBenchModelMetrics = get_model_test_metrics(model, metrics=metrics)
+                    result: TorchBenchModelMetrics = get_model_test_metrics(model, metrics=metrics, nwarmup=nwarmup, num_iter=num_iter)
                 print(prof.key_averages().table(sort_by="self_cpu_time_total", row_limit=-1))
             else:
-                result: TorchBenchModelMetrics = get_model_test_metrics(model, metrics=metrics)
+                result: TorchBenchModelMetrics = get_model_test_metrics(model, metrics=metrics, nwarmup=nwarmup, num_iter=num_iter)
         except NotImplementedError as e:
             print(" [NotImplemented]")
             return None
@@ -87,7 +91,7 @@ with add_path(str(REPO_PATH)):
             extra_args=extra_args,
             extra_env=None)
         try:
-            metrics_res = run_config(config, metrics, dryrun=args.dryrun, profile=args.profile)
+            metrics_res = run_config(config, metrics, dryrun=args.dryrun, profile=args.profile, nwarmup=args.nwarmup, num_iter=args.num_iter)
         except KeyboardInterrupt:
             print("User keyboard interrupted!")
         if not args.dryrun:
@@ -102,12 +106,14 @@ with add_path(str(REPO_PATH)):
         parser = argparse.ArgumentParser()
         parser.add_argument("--device", "-d", default="cpu", help="Devices to run.")
         parser.add_argument("--test", "-t", default="eval", help="Tests to run.")
-        parser.add_argument("--model", "-m", default=None, type=str, help="Only run the specifice model.")
-        parser.add_argument("--batch-size", "-b", default=None, type=int, help="Run the specifice batch size.")
+        parser.add_argument("--model", "-m", default=None, type=str, help="Only run the specified model.")
+        parser.add_argument("--batch-size", "-b", default=None, type=int, help="Run the specified batch size.")
         parser.add_argument("--jit", action="store_true", help="Convert the models to jit mode.")
         parser.add_argument("--output", "-o", default=None, help="Output dir.")
         parser.add_argument("--metrics", default="latencies", help="Benchmark metrics, split by comma.")
         parser.add_argument("--dryrun", action="store_true", help="Dryrun the command.")
         parser.add_argument("--profile", action="store_true", help="Run the profiler around the function")
+        parser.add_argument("--nwarmup", default=WARMUP_ROUNDS, type=int, help="Run the specified the number of warmup iterations.")
+        parser.add_argument("--num-iter", "-n", default=BENCHMARK_ITERS, type=int, help="Run the specified the number of iterations.")
         args, extra_args = parser.parse_known_args()
         run(args, extra_args)

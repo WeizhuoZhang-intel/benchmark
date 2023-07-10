@@ -67,8 +67,8 @@ def parse_args(args):
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", "-d", default="cpu", help="Devices to run, splited by comma.")
     parser.add_argument("--test", "-t", default="eval", help="Tests to run, splited by comma.")
-    parser.add_argument("--model", "-m", default=None, help="Only run the specifice models, splited by comma.")
-    parser.add_argument("--batch-size", "-b", default=None, help="Run the specifice batch size.")
+    parser.add_argument("--model", "-m", default=None, help="Only run the specified models, splited by comma.")
+    parser.add_argument("--batch-size", "-b", default=None, help="Run the specified batch size.")
     parser.add_argument("--jit", action="store_true", help="Convert the models to jit mode.")
     parser.add_argument("--config", "-c", default=None, help="YAML config to specify tests to run.")
     parser.add_argument("--metrics", default="latencies", help="Benchmark metrics, split by comma.")
@@ -80,6 +80,8 @@ def parse_args(args):
 
     # Debug Parameters only used in command line
     parser.add_argument("--profile", action="store_true", help="Run the profiler around the function")
+    parser.add_argument("--nwarmup", default=None, type=int, help="Run the specified the number of warmup iterations.")
+    parser.add_argument("--num-iter", "-n", default=None, type=int, help="Run the specified the number of iterations.")
     return parser.parse_known_args(args)
 
 def run(args: List[str]):
@@ -130,7 +132,12 @@ def run_benchmark(config, args):
         cmd.append("--jit")
     if args.profile:
         cmd.append("--profile")
-
+    if args.nwarmup:
+        cmd.append("--nwarmup")
+        cmd.append(str(args.nwarmup))
+    if args.num_iter:
+        cmd.append("-n")
+        cmd.append(str(args.num_iter))
     cmd.extend(config.extra_args)
     cmd.append("--metrics")
     cmd.append(args.metrics)

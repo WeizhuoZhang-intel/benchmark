@@ -20,10 +20,12 @@ python run_benchmark.py cpu <cpu userbenchmark specific parameters> <extra args 
 All parameters of `cpu` userbenchmark as below,
 - `--device, -d` devices to run, default value is `cpu`.
 - `--test, -t` tests to run, splited by comma. Default value is `eval`.
-- `--model, -m` only run the specifice models, split by comma. Default value is
+- `--model, -m` only run the specified models, split by comma. Default value is
   `None`, means run all models.
-- `--batch-size, -b` run with the specifice batch size. Default value is `None`,
+- `--batch-size, -b` run with the specified batch size. Default value is `None`,
   means run eith mdoel predifined default batch size.
+- `--nwarmup` specify the number of warmup iterations. Default value is 10.
+- `--num-iter, -n` specify the number of iterations. Default value is 15.
 - `--jit` whether to convert and run the model with `jit` mode.
 - `--config, -c` YAML config to specify tests to run.
 - `--metrics` benchmark metrics, split by comma. Current support metrics
@@ -49,7 +51,7 @@ can add all supported extra args defined in
 [`extra_args.py`](../../torchbenchmark/util/extra_args.py) and specific args
 defined in each [`backend`](../../torchbenchmark/util/backends). For example, if
 the extra arg `--precision fx_int8` with `-t eval` have been added into the test
-command, it will do fx int8 inference benchmark for specifice models. And if
+command, it will do fx int8 inference benchmark for specified models. And if
 `torchdynamo` backend related args have been added, it will do torchdynamo
 related benchmarks accordingly.
 
